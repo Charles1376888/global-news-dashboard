@@ -207,14 +207,33 @@ function clusterAndScore(items){
   return result;
 }
 
+async function fetchNewsJSON(){
+  try{
+    const ctrl=new AbortController();
+    setTimeout(()=>ctrl.abort(),8000);
+    const r=await fetch('./news.json',{signal:ctrl.signal,cache:'no-cache'});
+    if(!r.ok)return[];
+    const d=await r.json();
+    return d.items||[];
+  }catch(e){return[];}
+}
+
 async function fetchAllNews(){
-  const allItems=[];
+  // Primary: server-side pre-fetched news.json (GitHub Actions)
+  const jsonItems=await fetchNewsJSON();
+  // Secondary: client-side live fetch for freshness
+  const allItems=[...jsonItems];
+  const seen=new Set(allItems.map(i=>i._id));
   const results=await Promise.allSettled([
     fetchWeibo(),
     ...RSS_SOURCES.map(s=>fetchRSS(s))
   ]);
   for(const r of results){
-    if(r.status==='fulfilled'&&r.value.length)allItems.push(...r.value);
+    if(r.status==='fulfilled'&&r.value.length){
+      for(const item of r.value){
+        if(!seen.has(item._id)){allItems.push(item);seen.add(item._id);}
+      }
+    }
   }
   if(!allItems.length){
     const cached=localStorage.getItem('news_cache');
@@ -266,16 +285,23 @@ async function refresh(){
 
 async function loadNews(){
   $('#content').innerHTML='<div class="loading"></div>';
-  const cached=localStorage.getItem('news_cache');
-  if(cached){
-    try{
-      const c=JSON.parse(cached);
-      if(c.items&&c.items.length&&(Date.now()-c.ts)<NEWS_TTL){
-        newsCache=c.items;newsLastFetch=c.ts;
-      }
-    }catch(e){}
+  // 1st: try server-side news.json (fast, reliable)
+  const jsonItems=await fetchNewsJSON();
+  if(jsonItems.length){newsCache=jsonItems;newsLastFetch=Date.now();renderFiltered();}
+  // 2nd: fallback to localStorage cache
+  if(!newsCache.length){
+    const cached=localStorage.getItem('news_cache');
+    if(cached){
+      try{
+        const c=JSON.parse(cached);
+        if(c.items&&c.items.length&&(Date.now()-c.ts)<NEWS_TTL){
+          newsCache=c.items;newsLastFetch=c.ts;
+        }
+      }catch(e){}
+    }
   }
   if(newsCache.length)renderFiltered();
+  // 3rd: live fetch for freshness + merge
   const fresh=await fetchAllNews();
   if(fresh.length){newsCache=fresh;newsLastFetch=Date.now();}
   renderFiltered();

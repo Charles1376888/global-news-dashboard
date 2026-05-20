@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: global-news-dashboard
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18.x
+      - key: DEEPSEEK_KEY
+        value: sk-aa98ab5a440f46c4b357ad7c72677af2

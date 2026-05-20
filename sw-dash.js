@@ -1,9 +1,9 @@
-const CACHE = 'global-news-v2';
+const CACHE = 'global-news-v3';
 const ASSETS = [
-  '/dashboard.html',
-  '/manifest_dash.json',
-  '/icon-192.png',
-  '/icon-512.png',
+  './dashboard.html',
+  './manifest_dash.json',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
 self.addEventListener('install', e => {

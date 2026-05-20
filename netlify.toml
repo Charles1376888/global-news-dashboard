@@ -1,17 +1,18 @@
 [build]
   command = "npm install"
-  functions = "netlify/functions"
   publish = "."
 
 [build.environment]
   NODE_VERSION = "18"
 
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/news-wrapper/:splat"
-  status = 200
+[[headers]]
+  for = "/manifest_dash.json"
+  [headers.values]
+    Content-Type = "application/manifest+json"
+    Cache-Control = "no-cache"
 
-[[redirects]]
-  from = "/*"
-  to = "/:splat"
-  status = 200
+[[headers]]
+  for = "/sw-dash.js"
+  [headers.values]
+    Service-Worker-Allowed = "/"
+    Cache-Control = "no-cache"

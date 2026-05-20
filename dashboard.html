@@ -74,98 +74,260 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 
 <script>
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
-let currentSort='heat',currentCountry='',currentTag='';
+let currentSort='heat',currentCountry='',currentTag='',newsCache=[],newsLastFetch=0;
+const NEWS_TTL=30*60*1000;
 
+// ==================== News Engine (Client-side) ====================
+const TAG_RULES=[
+  {tag:'光伏',keys:['solar','光伏','太阳能','photovoltaic','硅料','硅片','组件']},
+  {tag:'风电',keys:['wind','风电','风机','海上风电','陆上风电','offshore wind']},
+  {tag:'储能',keys:['storage','储能','电池储能','battery storage','bess']},
+  {tag:'锂电',keys:['lithium','锂电','锂电池','锂矿','碳酸锂','宁德时代','比亚迪','catl','byd']},
+  {tag:'氢能',keys:['hydrogen','氢能','氢燃料','电解水','绿氢','燃料电池']},
+  {tag:'电动车',keys:['ev','电动','电动车','新能源车','tesla','特斯拉','蔚来','小鹏','理想','充电桩']},
+  {tag:'油气',keys:['oil','gas','石油','天然气','原油','opec','lng']},
+  {tag:'核能',keys:['nuclear','核能','核电站','核电','fusion','uranium']},
+  {tag:'AI',keys:['ai','人工智能','chatgpt','gpt','llm','大模型','deepseek','openai','深度学习']},
+  {tag:'芯片',keys:['chip','芯片','半导体','nvidia','英伟达','台积电','tsmc','英特尔']},
+  {tag:'地缘',keys:['war','战争','冲突','制裁','sanction','关税','tariff','贸易战','俄乌','中东','北约']},
+  {tag:'金融',keys:['stock','股市','股票','a股','港股','美股','利率','加息','降息','美联储','央行','crypto','加密','比特币']},
+  {tag:'气候',keys:['climate','气候','碳排放','碳交易','碳中和','碳达峰','net zero']},
+  {tag:'太空',keys:['space','太空','航天','spacex','nasa','火箭','卫星','星链']},
+  {tag:'生物',keys:['医药','疫苗','基因','crispr','生物','pharma','癌症']},
+];
+
+const RSS_SOURCES=[
+  {name:'36氪',url:'https://36kr.com/feed',tags:['科技','商业','新能源']},
+  {name:'北极星光伏',url:'https://guangfu.bjx.com.cn/rss.aspx',tags:['光伏','新能源']},
+  {name:'北极星储能',url:'https://chuneng.bjx.com.cn/rss.aspx',tags:['储能','新能源']},
+  {name:'北极星风电',url:'https://fd.bjx.com.cn/rss.aspx',tags:['风电','新能源']},
+];
+
+function extractKeywords(text){
+  const cnWords=text.match(/[一-鿿]{2,}/g)||[];
+  const words=text.toLowerCase().replace(/[^\w\s]/g,' ').split(/\s+/).filter(w=>w.length>=2);
+  return [...new Set([...words,...cnWords])].slice(0,20);
+}
+
+function tagNewsItem(title,snippet){
+  const text=(title+' '+(snippet||'')).toLowerCase();
+  const tags=[];
+  for(const rule of TAG_RULES){
+    for(const key of rule.keys){
+      if(text.includes(key)){tags.push(rule.tag);break;}
+    }
+  }
+  return [...new Set(tags)];
+}
+
+async function fetchWeibo(){
+  try{
+    const ctrl=new AbortController();
+    setTimeout(()=>ctrl.abort(),5000);
+    const r=await fetch('https://weibo.com/ajax/side/hotSearch',{
+      signal:ctrl.signal,
+      headers:{'User-Agent':'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36','Referer':'https://weibo.com/'}
+    });
+    if(!r.ok)return[];
+    const d=await r.json();
+    const topics=d?.data?.realtime||[];
+    const items=[];
+    const now=new Date().toISOString();
+    for(const t of topics.slice(0,50)){
+      if(!t.word)continue;
+      const tags=tagNewsItem(t.word,t.note||'');
+      items.push({
+        _id:'wb|'+t.word,title:t.word,
+        link:'https://s.weibo.com/weibo?q='+encodeURIComponent(t.word),
+        snippet:(t.note||'').slice(0,200),pubDate:now,
+        source:'微博热搜',country:'中国',allCountries:['中国'],
+        sourceTags:['热搜','实时'],tags:tags.length?tags:['热议'],
+        _keywords:extractKeywords(t.word+' '+(t.note||'')),
+        _cn:true,_heatBase:Math.round((t.num||100000)/100000),
+      });
+    }
+    return items;
+  }catch(e){return[];}
+}
+
+async function fetchRSS(source){
+  try{
+    const ctrl=new AbortController();
+    setTimeout(()=>ctrl.abort(),4000);
+    const r=await fetch('https://api.rss2json.com/v1/api.json?rss_url='+encodeURIComponent(source.url),{signal:ctrl.signal});
+    if(!r.ok)return[];
+    const d=await r.json();
+    if(d.status!=='ok')return[];
+    const items=[];
+    for(const item of(d.items||[]).slice(0,30)){
+      const d2=new Date(item.pubDate);
+      if(!isNaN(d2.getTime())&&d2.getTime()<Date.now()-7*86400000)continue;
+      const tags=tagNewsItem(item.title,item.description||'');
+      items.push({
+        _id:source.name+'|'+(item.link||item.title),
+        title:item.title||'',link:item.link||'',
+        snippet:(item.description||'').replace(/<[^>]+>/g,'').slice(0,200),
+        pubDate:item.pubDate||'',source:source.name,
+        country:'中国',allCountries:['中国'],
+        sourceTags:source.tags,tags:tags,
+        _keywords:extractKeywords((item.title||'')+' '+(item.description||'')),
+        _cn:true,
+      });
+    }
+    return items;
+  }catch(e){return[];}
+}
+
+function clusterAndScore(items){
+  const clusters=[],used=new Set();
+  for(let i=0;i<items.length;i++){
+    if(used.has(i))continue;
+    const cluster=[items[i]];used.add(i);
+    const kwi=new Set(items[i]._keywords||[]);
+    for(let j=i+1;j<items.length;j++){
+      if(used.has(j))continue;
+      const kwj=new Set(items[j]._keywords||[]);
+      if([...kwi].filter(k=>kwj.has(k)).length>=3){cluster.push(items[j]);used.add(j);}
+    }
+    clusters.push(cluster);
+  }
+  const result=[];
+  for(const cluster of clusters){
+    const cnBoost=cluster.some(i=>i._cn)?1:0;
+    const weiboHeat=cluster.reduce((s,i)=>s+(i._heatBase||0),0);
+    const heat=cluster.length+cnBoost+weiboHeat;
+    for(const item of cluster.slice(0,2))result.push({...item,heat});
+  }
+  return result;
+}
+
+async function fetchAllNews(){
+  const allItems=[];
+  const results=await Promise.allSettled([
+    fetchWeibo(),
+    ...RSS_SOURCES.map(s=>fetchRSS(s))
+  ]);
+  for(const r of results){
+    if(r.status==='fulfilled'&&r.value.length)allItems.push(...r.value);
+  }
+  if(!allItems.length){
+    const cached=localStorage.getItem('news_cache');
+    if(cached)return JSON.parse(cached).items||[];
+    return[];
+  }
+  const clustered=clusterAndScore(allItems);
+  try{localStorage.setItem('news_cache',JSON.stringify({items:clustered,ts:Date.now()}));}catch(e){}
+  return clustered;
+}
+
+// ==================== UI ====================
 function setSort(s){
-  currentSort=s; currentCountry=''; currentTag='';
+  currentSort=s;currentCountry='';currentTag='';
   $$('#toolbar .t-btn[data-sort]').forEach(b=>b.classList.toggle('on',b.dataset.sort===s));
   $('#countryBtns').innerHTML='';
-  if(s==='country'){ $('#countryBtns').style.display=''; loadCountries(); }
+  if(s==='country'){$('#countryBtns').style.display='';loadCountries();}
   else $('#countryBtns').style.display='none';
-  loadNews();
+  renderFiltered();
 }
 
 async function loadCountries(){
-  try{
-    const r=await fetch('/api/news');
-    const d=await r.json();
-    let h='';
-    (d.allCountries||[]).forEach(c=>h+=`<button class="t-btn" onclick="selectCountry('${c}')">${c}</button>`);
-    $('#countryBtns').innerHTML=h;
-  }catch(e){}
+  let h='';
+  const countries=[...new Set(newsCache.flatMap(i=>i.allCountries||[]))].sort();
+  countries.forEach(c=>h+=`<button class="t-btn" onclick="selectCountry('${c}')">${c}</button>`);
+  $('#countryBtns').innerHTML=h;
 }
 
 function selectCountry(c){
   currentCountry=c;
   $$('#countryBtns .t-btn').forEach(b=>b.classList.toggle('on',b.textContent===c));
-  loadNews();
+  renderFiltered();
 }
 
 function selectTag(t){
   currentTag=(t===currentTag)?'':t;
   $$('#tagBtns .t-btn').forEach(b=>b.classList.toggle('on',b.textContent===t&&currentTag===t));
-  loadNews();
+  renderFiltered();
 }
 
 async function refresh(){
   showToast('Refreshing...');
-  await loadNews('1');
-  showToast('Done!');
+  $('#status').textContent='Fetching...';
+  newsCache=await fetchAllNews();
+  newsLastFetch=Date.now();
+  renderFiltered();
+  showToast(newsCache.length+' items loaded!');
 }
 
-async function loadNews(force=''){
+async function loadNews(){
   $('#content').innerHTML='<div class="loading"></div>';
-  const p=new URLSearchParams();
-  p.set('sort',currentSort);
-  if(currentCountry) p.set('country',currentCountry);
-  if(currentTag) p.set('tag',currentTag);
-  if(force) p.set('force','1');
-
-  try{
-    const r=await fetch('/api/news?'+p.toString());
-    const d=await r.json();
-    renderNews(d);
-    renderTags(d);
-    $('#status').textContent=d.items.length+' stories &middot; '+new Date(d.fetchedAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
-  }catch(e){
-    $('#content').innerHTML='<div class="error">Failed to load. <a href="javascript:refresh()" style="color:#f48771;text-decoration:underline">Retry</a></div>';
+  const cached=localStorage.getItem('news_cache');
+  if(cached){
+    try{
+      const c=JSON.parse(cached);
+      if(c.items&&c.items.length&&(Date.now()-c.ts)<NEWS_TTL){
+        newsCache=c.items;newsLastFetch=c.ts;
+      }
+    }catch(e){}
   }
+  if(newsCache.length)renderFiltered();
+  const fresh=await fetchAllNews();
+  if(fresh.length){newsCache=fresh;newsLastFetch=Date.now();}
+  renderFiltered();
 }
 
-function renderTags(data){
+function renderFiltered(){
+  let items=[...newsCache];
+  if(currentTag)items=items.filter(i=>i.tags.includes(currentTag));
+  if(currentCountry)items=items.filter(i=>i.country===currentCountry||(i.allCountries||[]).includes(currentCountry));
+  if(currentSort==='time'){
+    items.sort((a,b)=>new Date(b.pubDate||0)-new Date(a.pubDate||0));
+  }else{
+    items.sort((a,b)=>(b.heat||0)-(a.heat||0)||(new Date(b.pubDate||0)-new Date(a.pubDate||0)));
+  }
+  renderNews(items);
+  renderTags();
+  const now=new Date();
+  let s=newsCache.length+' items';
+  if(newsLastFetch){
+    const mins=Math.round((now-newsLastFetch)/60000);
+    s+=' · '+(mins<1?'just now':mins+'m ago');
+  }
+  $('#status').textContent=s;
+}
+
+function renderTags(){
+  const allTags=[...new Set(newsCache.flatMap(i=>i.tags))].sort();
   let h='';
-  (data.allTags||[]).slice(0,15).forEach(t=>{
+  allTags.slice(0,15).forEach(t=>{
     h+=`<button class="t-btn${t===currentTag?' on':''}" onclick="selectTag('${t}')">${t}</button>`;
   });
   $('#tagBtns').innerHTML=h;
 }
 
-function renderNews(data){
-  if(!data.items.length){
-    $('#content').innerHTML='<div class="empty">No news found. Try different filters or refresh.</div>';
+function renderNews(items){
+  if(!items.length){
+    $('#content').innerHTML='<div class="empty">No news yet. Tap Refresh to fetch the latest.</div>';
     return;
   }
-
   let html='';
-  data.items.forEach(item=>{
+  items.slice(0,200).forEach(item=>{
     const d=new Date(item.pubDate);
     const ds=isNaN(d.getTime())?'':d.toLocaleDateString('zh-CN',{month:'short',day:'numeric'});
-    const heatStars=item.heat>=5?'&#128293;'.repeat(5):item.heat>=3?'&#128293;'.repeat(3):item.heat>=2?'&#128293;&#128293;':item.heat?'&#128293;':'';
-
-    const linkEnc = item.link.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    const heatStars=item.heat>=5?'&#128293;'.repeat(Math.min(item.heat,5)):'';
+    const linkEnc=item.link.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
     html+=`
     <div class="news-card" data-link="${linkEnc}" onclick="event.stopPropagation();window.open(this.dataset.link)">
       <div class="top">
         ${item.country?`<span class="country">${item.country}</span>`:''}
         <span class="src">${item.source}</span>
         <span class="time">${ds}</span>
-        ${item.heat>1?`<span class="heat">${heatStars} ${item.heat}</span>`:''}
+        ${item.heat>=2?`<span class="heat">${heatStars}</span>`:''}
       </div>
       <div class="ttl">${item.title}</div>
       ${item.snippet?`<div class="sum">${item.snippet}</div>`:''}
       <div class="tags">
         ${(item.sourceTags||[]).map(t=>`<span>${t}</span>`).join('')}
-        ${(item.tags||[]).map(t=>`<span class="en">${t}</span>`).join('')}
+        ${(item.tags||[]).slice(0,4).map(t=>`<span class="en">${t}</span>`).join('')}
       </div>
     </div>`;
   });
@@ -174,7 +336,7 @@ function renderNews(data){
 
 function showToast(msg){
   const t=$('#toast');
-  t.textContent=msg; t.classList.add('show');
+  t.textContent=msg;t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),1800);
 }
 
@@ -183,30 +345,28 @@ loadNews();
 // Browser detection + Fullscreen + PWA Install
 const ua=navigator.userAgent;
 const isIOS=/iPad|iPhone|iPod/.test(ua);
-const isChrome=/Chrome/.test(ua) && !/Edge|OPR|baidu|QQ|UCBrowser|Samsung|2345/.test(ua);
+const isChrome=/Chrome/.test(ua)&&!/Edge|OPR|baidu|QQ|UCBrowser|Samsung|2345/.test(ua);
 const isBaidu=/baidu/i.test(ua);
 const isQQ=/QQBrowser/i.test(ua);
 const isUC=/UCBrowser/i.test(ua);
 const isWechat=/MicroMessenger/i.test(ua);
 const isEdge=/Edg/.test(ua);
-const isStandalone=window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+const isStandalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone;
 let deferredPrompt;
 
-// Fullscreen toggle (works in Baidu, QQ, UC, etc.)
 window.toggleFullscreen=function(){
   if(document.fullscreenElement){
     document.exitFullscreen();
     showToast('Exited fullscreen');
   }else{
     document.documentElement.requestFullscreen().then(()=>{
-      showToast('Fullscreen — swipe down to exit');
+      showToast('Fullscreen -- swipe down to exit');
     }).catch(()=>{
       showToast('Fullscreen not supported by browser');
     });
   }
 };
 
-// Show install guide
 function showGuide(){
   if(isStandalone)return;
   const g=document.getElementById('install-guide');
@@ -233,7 +393,6 @@ function showGuide(){
   }
 }
 
-// PWA Install button
 function updateInstallBtn(){
   if(isStandalone)return;
   const btn=document.getElementById('install-btn');
@@ -243,7 +402,7 @@ function updateInstallBtn(){
     btn.textContent='Add to Home Screen';
   }else{
     btn.textContent='How to Install';
-    btn.style.borderColor='#f08c00'; btn.style.color='#f08c00';
+    btn.style.borderColor='#f08c00';btn.style.color='#f08c00';
   }
 }
 
@@ -267,26 +426,19 @@ window.installApp=async function(){
     deferredPrompt=null;
     return;
   }
-  // Show guide for all browsers that don't fire beforeinstallprompt
   const g=document.getElementById('install-guide');
   if(g.style.display==='none'||!g.style.display){showGuide()}else{g.style.display='none'}
 };
 
-// Service Worker
-if('serviceWorker' in navigator && (isChrome||isEdge)){
+if('serviceWorker' in navigator&&(isChrome||isEdge)){
   navigator.serviceWorker.register('/sw-dash.js').then(reg=>{
-    if(reg.waiting){ reg.waiting.postMessage('skipWaiting'); }
+    if(reg.waiting){reg.waiting.postMessage('skipWaiting');}
     updateInstallBtn();
   }).catch(()=>{});
 }
 
-// Show button after delay
-setTimeout(updateInstallBtn, 1500);
-
-// Auto-show guide for non-Chrome after 3s
-if(!isChrome && !isEdge && !isStandalone){
-  setTimeout(showGuide, 3000);
-}
+setTimeout(updateInstallBtn,1500);
+if(!isChrome&&!isEdge&&!isStandalone){setTimeout(showGuide,3000);}
 </script>
 </body>
 </html>

@@ -1,0 +1,14 @@
+{
+  "name": "global-news-dashboard",
+  "version": "1.0.0",
+  "description": "Global Energy News Dashboard - Mobile PWA",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.0",
+    "rss-parser": "^3.13.0"
+  }
+}

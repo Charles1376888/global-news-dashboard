@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Global News</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a1a2e">
+<link rel="manifest" href="/manifest_dash.json">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;overflow:hidden}
+
+#app{display:flex;flex-direction:column;height:100%}
+#header{background:#16213e;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #0f3460}
+#header h1{font-size:16px;font-weight:600}
+#header .stat{font-size:11px;color:#888}
+
+#toolbar{background:#16213e;padding:8px 12px;border-bottom:1px solid #0f3460;overflow-x:auto;white-space:nowrap}
+#toolbar::-webkit-scrollbar{display:none}
+.t-btn{display:inline-block;padding:5px 12px;border-radius:12px;font-size:11px;border:1px solid #0f3460;background:none;color:#888;cursor:pointer;margin-right:6px}
+.t-btn.on{background:#00d2ff;color:#1a1a2e;border-color:#00d2ff}
+.t-btn.refresh{background:none;border-color:#f08c00;color:#f08c00}
+
+#content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px}
+
+.news-card{background:#16213e;border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer}
+.news-card .top{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+.news-card .country{font-size:9px;padding:1px 6px;border-radius:4px;background:#0d2b1e;color:#4caf91}
+.news-card .src{font-size:10px;color:#00d2ff}
+.news-card .time{font-size:10px;color:#666}
+.news-card .heat{font-size:10px;color:#ff922b;margin-left:auto}
+.news-card .ttl{font-size:14px;line-height:1.5;margin-bottom:6px;color:#e0e0e0}
+.news-card .sum{font-size:12px;color:#888;line-height:1.5;margin-bottom:6px}
+.news-card .tags{display:flex;gap:4px;flex-wrap:wrap}
+.news-card .tags span{font-size:9px;padding:2px 8px;border-radius:8px;background:#0d1b3e;color:#666}
+.news-card .tags span.en{background:#0d2b1e;color:#4caf91}
+
+.loading{text-align:center;padding:40px;color:#666}
+.loading::after{content:'Loading news...'}
+.empty{text-align:center;color:#666;padding:40vh 20px;font-size:14px}
+.error{background:#3d1418;color:#f48771;padding:16px;border-radius:8px;text-align:center}
+
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#00d2ff;color:#1a1a2e;padding:8px 20px;border-radius:16px;font-size:12px;font-weight:600;z-index:100;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div id="app">
+<div id="header">
+  <h1>&#127760; Global News</h1>
+  <span class="stat" id="status">Loading...</span>
+</div>
+<div id="toolbar">
+  <button class="t-btn on" data-sort="heat" onclick="setSort('heat')">&#128293; Hot</button>
+  <button class="t-btn" data-sort="time" onclick="setSort('time')">&#9200; Newest</button>
+  <button class="t-btn" data-sort="country" onclick="setSort('country')">&#127757; Country</button>
+  <span id="countryBtns"></span>
+  <span id="tagBtns"></span>
+  <button class="t-btn refresh" onclick="refresh()">&#8635; Refresh</button>
+  <button class="t-btn" id="fullscreen-btn" onclick="toggleFullscreen()" title="Fullscreen">&#9974;</button>
+  <button class="t-btn" id="install-btn" style="display:none" onclick="installApp()">+ Add to Home Screen</button>
+</div>
+<div id="install-guide" style="display:none;background:#16213e;border:1px solid #f08c00;border-radius:10px;padding:12px;margin:0 12px 12px;font-size:13px;color:#ccc;line-height:1.8">
+  <b style="color:#f08c00">Add to Home Screen:</b><br>
+  <span id="guide-text"></span>
+</div>
+<div id="content">
+  <div class="loading"></div>
+</div>
+<div class="toast" id="toast"></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+let currentSort='heat',currentCountry='',currentTag='';
+
+function setSort(s){
+  currentSort=s; currentCountry=''; currentTag='';
+  $$('#toolbar .t-btn[data-sort]').forEach(b=>b.classList.toggle('on',b.dataset.sort===s));
+  $('#countryBtns').innerHTML='';
+  if(s==='country'){ $('#countryBtns').style.display=''; loadCountries(); }
+  else $('#countryBtns').style.display='none';
+  loadNews();
+}
+
+async function loadCountries(){
+  try{
+    const r=await fetch('/api/news');
+    const d=await r.json();
+    let h='';
+    (d.allCountries||[]).forEach(c=>h+=`<button class="t-btn" onclick="selectCountry('${c}')">${c}</button>`);
+    $('#countryBtns').innerHTML=h;
+  }catch(e){}
+}
+
+function selectCountry(c){
+  currentCountry=c;
+  $$('#countryBtns .t-btn').forEach(b=>b.classList.toggle('on',b.textContent===c));
+  loadNews();
+}
+
+function selectTag(t){
+  currentTag=(t===currentTag)?'':t;
+  $$('#tagBtns .t-btn').forEach(b=>b.classList.toggle('on',b.textContent===t&&currentTag===t));
+  loadNews();
+}
+
+async function refresh(){
+  showToast('Refreshing...');
+  await loadNews('1');
+  showToast('Done!');
+}
+
+async function loadNews(force=''){
+  $('#content').innerHTML='<div class="loading"></div>';
+  const p=new URLSearchParams();
+  p.set('sort',currentSort);
+  if(currentCountry) p.set('country',currentCountry);
+  if(currentTag) p.set('tag',currentTag);
+  if(force) p.set('force','1');
+
+  try{
+    const r=await fetch('/api/news?'+p.toString());
+    const d=await r.json();
+    renderNews(d);
+    renderTags(d);
+    $('#status').textContent=d.items.length+' stories &middot; '+new Date(d.fetchedAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+  }catch(e){
+    $('#content').innerHTML='<div class="error">Failed to load. <a href="javascript:refresh()" style="color:#f48771;text-decoration:underline">Retry</a></div>';
+  }
+}
+
+function renderTags(data){
+  let h='';
+  (data.allTags||[]).slice(0,15).forEach(t=>{
+    h+=`<button class="t-btn${t===currentTag?' on':''}" onclick="selectTag('${t}')">${t}</button>`;
+  });
+  $('#tagBtns').innerHTML=h;
+}
+
+function renderNews(data){
+  if(!data.items.length){
+    $('#content').innerHTML='<div class="empty">No news found. Try different filters or refresh.</div>';
+    return;
+  }
+
+  let html='';
+  data.items.forEach(item=>{
+    const d=new Date(item.pubDate);
+    const ds=isNaN(d.getTime())?'':d.toLocaleDateString('zh-CN',{month:'short',day:'numeric'});
+    const heatStars=item.heat>=5?'&#128293;'.repeat(5):item.heat>=3?'&#128293;'.repeat(3):item.heat>=2?'&#128293;&#128293;':item.heat?'&#128293;':'';
+
+    const linkEnc = item.link.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    html+=`
+    <div class="news-card" data-link="${linkEnc}" onclick="event.stopPropagation();window.open(this.dataset.link)">
+      <div class="top">
+        ${item.country?`<span class="country">${item.country}</span>`:''}
+        <span class="src">${item.source}</span>
+        <span class="time">${ds}</span>
+        ${item.heat>1?`<span class="heat">${heatStars} ${item.heat}</span>`:''}
+      </div>
+      <div class="ttl">${item.title}</div>
+      ${item.snippet?`<div class="sum">${item.snippet}</div>`:''}
+      <div class="tags">
+        ${(item.sourceTags||[]).map(t=>`<span>${t}</span>`).join('')}
+        ${(item.tags||[]).map(t=>`<span class="en">${t}</span>`).join('')}
+      </div>
+    </div>`;
+  });
+  $('#content').innerHTML=html;
+}
+
+function showToast(msg){
+  const t=$('#toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),1800);
+}
+
+loadNews();
+
+// Browser detection + Fullscreen + PWA Install
+const ua=navigator.userAgent;
+const isIOS=/iPad|iPhone|iPod/.test(ua);
+const isChrome=/Chrome/.test(ua) && !/Edge|OPR|baidu|QQ|UCBrowser|Samsung|2345/.test(ua);
+const isBaidu=/baidu/i.test(ua);
+const isQQ=/QQBrowser/i.test(ua);
+const isUC=/UCBrowser/i.test(ua);
+const isWechat=/MicroMessenger/i.test(ua);
+const isEdge=/Edg/.test(ua);
+const isStandalone=window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+let deferredPrompt;
+
+// Fullscreen toggle (works in Baidu, QQ, UC, etc.)
+window.toggleFullscreen=function(){
+  if(document.fullscreenElement){
+    document.exitFullscreen();
+    showToast('Exited fullscreen');
+  }else{
+    document.documentElement.requestFullscreen().then(()=>{
+      showToast('Fullscreen — swipe down to exit');
+    }).catch(()=>{
+      showToast('Fullscreen not supported by browser');
+    });
+  }
+};
+
+// Show install guide
+function showGuide(){
+  if(isStandalone)return;
+  const g=document.getElementById('install-guide');
+  const t=document.getElementById('guide-text');
+  g.style.display='';
+  const url=location.protocol+'//'+location.host;
+  if(isChrome||isEdge){
+    t.innerHTML='Tap browser menu <b>(⋮)</b> → <b>"Install App"</b> or <b>"Add to Home Screen"</b>';
+  }else if(isBaidu||isQQ||isUC){
+    t.innerHTML=`
+      <b style="color:#f08c00">百度浏览器不支持添加到桌面</b><br><br>
+      Tap one of these to open in a browser that supports it:<br>
+      <a href="intent://${location.host}/#Intent;scheme=http;package=com.android.chrome;end" style="display:inline-block;margin:6px 4px;padding:6px 14px;background:#007acc;color:#fff;border-radius:8px;text-decoration:none;font-size:13px">Open in Chrome</a>
+      <a href="intent://${location.host}/#Intent;scheme=http;end" style="display:inline-block;margin:6px 4px;padding:6px 14px;background:#0f3460;color:#fff;border-radius:8px;text-decoration:none;font-size:13px">Open in System Browser</a>
+      <br><span style="font-size:11px;color:#888">Or tap ⛴ above for fullscreen mode</span>`;
+  }else if(isWechat){
+    t.innerHTML='WeChat blocked: Tap <b>⋯</b> → <b>"Open in Browser"</b> first, then add from browser menu';
+  }else if(isIOS){
+    t.innerHTML='Tap <b>Share</b> icon (middle button at bottom) → <b>"Add to Home Screen"</b>';
+  }else{
+    t.innerHTML=`
+      Open this page in <b>Chrome</b> to install as App:<br>
+      <a href="googlechrome://${url}" style="display:inline-block;margin:6px 0;padding:6px 14px;background:#007acc;color:#fff;border-radius:8px;text-decoration:none;font-size:13px">Open in Chrome</a>`;
+  }
+}
+
+// PWA Install button
+function updateInstallBtn(){
+  if(isStandalone)return;
+  const btn=document.getElementById('install-btn');
+  btn.style.display='';
+  if(deferredPrompt){
+    btn.classList.add('on');
+    btn.textContent='Add to Home Screen';
+  }else{
+    btn.textContent='How to Install';
+    btn.style.borderColor='#f08c00'; btn.style.color='#f08c00';
+  }
+}
+
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();
+  deferredPrompt=e;
+  updateInstallBtn();
+});
+
+window.addEventListener('appinstalled',()=>{
+  document.getElementById('install-btn').style.display='none';
+  document.getElementById('install-guide').style.display='none';
+  showToast('Installed!');
+});
+
+window.installApp=async function(){
+  if(deferredPrompt){
+    deferredPrompt.prompt();
+    const{outcome}=await deferredPrompt.userChoice;
+    if(outcome==='accepted'){document.getElementById('install-btn').style.display='none';document.getElementById('install-guide').style.display='none';showToast('Installed!')}
+    deferredPrompt=null;
+    return;
+  }
+  // Show guide for all browsers that don't fire beforeinstallprompt
+  const g=document.getElementById('install-guide');
+  if(g.style.display==='none'||!g.style.display){showGuide()}else{g.style.display='none'}
+};
+
+// Service Worker
+if('serviceWorker' in navigator && (isChrome||isEdge)){
+  navigator.serviceWorker.register('/sw-dash.js').then(reg=>{
+    if(reg.waiting){ reg.waiting.postMessage('skipWaiting'); }
+    updateInstallBtn();
+  }).catch(()=>{});
+}
+
+// Show button after delay
+setTimeout(updateInstallBtn, 1500);
+
+// Auto-show guide for non-Chrome after 3s
+if(!isChrome && !isEdge && !isStandalone){
+  setTimeout(showGuide, 3000);
+}
+</script>
+</body>
+</html>

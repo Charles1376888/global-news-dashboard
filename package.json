@@ -9,6 +9,7 @@
   "license": "MIT",
   "dependencies": {
     "express": "^4.21.0",
-    "rss-parser": "^3.13.0"
+    "rss-parser": "^3.13.0",
+    "serverless-http": "^4.0.0"
   }
 }

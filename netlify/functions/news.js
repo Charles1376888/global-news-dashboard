@@ -1,29 +1,15 @@
 const express = require('express');
-const path = require('path');
 const RssParser = require('rss-parser');
-
-const PORT = process.env.PORT || 3000;
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-// ==================== Static Files ====================
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
-app.get('/manifest_dash.json', (req, res) => {
-  res.set('Content-Type', 'application/manifest+json');
-  res.set('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, 'manifest_dash.json'));
-});
-app.use(express.static(__dirname));
-
-// ==================== News Sources ====================
+// ==================== News Sources (Chinese new-energy focus) ====================
 const NEWS_SOURCES = [
-  // === 中文新能源核心源 ===
   { name: '36氪', url: 'https://36kr.com/feed', country: '中国', tags: ['科技', '商业', '新能源'], cn: true },
   { name: '华尔街见闻-能源', url: 'https://wallstreetcn.com/tag/能源', country: '中国', tags: ['财经', '能源'], cn: true },
   { name: '东方财富-新能源', url: 'https://finance.eastmoney.com/a/cxny.html', country: '中国', tags: ['财经', '新能源'], cn: true },
   { name: '证券时报-新能源', url: 'https://www.stcn.com/article/list/kj_xny.html', country: '中国', tags: ['财经', '新能源'], cn: true },
-  // === 行业媒体 ===
   { name: '北极星太阳能光伏网', url: 'https://guangfu.bjx.com.cn/rss.aspx', country: '中国', tags: ['光伏', '新能源'], cn: true },
   { name: '北极星储能网', url: 'https://chuneng.bjx.com.cn/rss.aspx', country: '中国', tags: ['储能', '新能源'], cn: true },
   { name: '北极星风力发电网', url: 'https://fd.bjx.com.cn/rss.aspx', country: '中国', tags: ['风电', '新能源'], cn: true },
@@ -51,34 +37,11 @@ const TAG_RULES = [
   { tag: '生物', keys: ['医药', '疫苗', '基因', 'crispr', '生物', 'pharma', '癌症'] },
 ];
 
-const COUNTRY_RULES = [
-  { country: '中国', keys: ['中国', 'china', '北京', '上海', '广东', '深圳', 'chinese'] },
-  { country: '美国', keys: ['美国', 'usa', 'us', 'america', 'biden', 'trump', 'united states'] },
-  { country: '欧盟', keys: ['欧盟', 'eu', 'europe', 'european', 'brussels'] },
-  { country: '德国', keys: ['德国', 'germany', 'berlin', 'german'] },
-  { country: '英国', keys: ['英国', 'uk', 'britain', 'united kingdom', 'london'] },
-  { country: '日本', keys: ['日本', 'japan', 'tokyo', 'japanese'] },
-  { country: '韩国', keys: ['韩国', 'korea', 'south korea', 'seoul'] },
-  { country: '印度', keys: ['印度', 'india', 'delhi', 'indian'] },
-  { country: '中东', keys: ['中东', 'middle east', 'saudi', 'uae', 'iran', 'iraq'] },
-  { country: '俄罗斯', keys: ['俄罗斯', 'russia', 'moscow', 'russian'] },
-];
-
 // ==================== News Engine ====================
 let newsCache = [];
 let newsLastFetch = 0;
 const NEWS_TTL = 30 * 60 * 1000;
 let fetchInProgress = false;
-
-function extractCountries(text) {
-  const countries = new Set();
-  for (const rule of COUNTRY_RULES) {
-    for (const key of rule.keys) {
-      if (text.includes(key)) { countries.add(rule.country); break; }
-    }
-  }
-  return [...countries];
-}
 
 function extractKeywords(text) {
   const stopWords = new Set(['the','and','for','that','this','with','from','have','will','what','when','where','which','about','their','they']);
@@ -129,9 +92,8 @@ function clusterAndScore(items) {
 
 async function fetchSingleSource(source, parser) {
   try {
-    const limit = source.cn ? 60 : 15;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 3000);
     const resp = await fetch(source.url, {
       signal: controller.signal,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36' }
@@ -141,13 +103,11 @@ async function fetchSingleSource(source, parser) {
     const xml = await resp.text();
     const feed = await parser.parseString(xml);
     const items = [];
-    for (const item of (feed.items || []).slice(0, limit)) {
+    for (const item of (feed.items || []).slice(0, source.cn ? 30 : 10)) {
       const itemDate = new Date(item.pubDate || item.isoDate || '');
       const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
       if (!isNaN(itemDate.getTime()) && itemDate.getTime() < sevenDaysAgo) continue;
       const text = (item.title || '') + ' ' + (item.contentSnippet || '') + ' ' + (item.content || '');
-      const countries = extractCountries(text.toLowerCase());
-      if (!countries.length && source.country) countries.push(source.country);
       items.push({
         _id: source.name + '|' + (item.link || item.title || Math.random()),
         title: item.title || '',
@@ -155,12 +115,12 @@ async function fetchSingleSource(source, parser) {
         snippet: (item.contentSnippet || item.content || '').replace(/<[^>]+>/g, '').slice(0, 200),
         pubDate: item.pubDate || item.isoDate || '',
         source: source.name,
-        country: countries[0] || source.country || '',
-        allCountries: countries,
+        country: source.country || '',
+        allCountries: [source.country || ''],
         sourceTags: source.tags,
         tags: tagNewsItem({ title: item.title, contentSnippet: item.contentSnippet || item.content || '' }),
         _keywords: extractKeywords(text),
-        _cn: !!source.cn,
+        _cn: true,
       });
     }
     return items;
@@ -170,7 +130,7 @@ async function fetchSingleSource(source, parser) {
 async function fetchWeiboHotSearch() {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
     const resp = await fetch('https://weibo.com/ajax/side/hotSearch', {
       signal: controller.signal,
       headers: {
@@ -208,70 +168,15 @@ async function fetchWeiboHotSearch() {
   } catch (e) { return []; }
 }
 
-function isChineseText(text) {
-  if (!text) return false;
-  const cjk = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
-  return cjk > text.length * 0.3;
-}
-
-async function translateBatch(items) {
-  const needTranslation = [];
-  for (const item of items) {
-    if (!isChineseText(item.title)) needTranslation.push({ id: item._id, text: item.title, field: 'title' });
-    if (item.snippet && !isChineseText(item.snippet)) needTranslation.push({ id: item._id, text: item.snippet, field: 'snippet' });
-  }
-  if (!needTranslation.length) return;
-
-  const texts = needTranslation.map((t, i) => `[#${i}]\n${t.text}`).join('\n---\n');
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (process.env.DEEPSEEK_KEY || '') },
-      body: JSON.stringify({
-        model: 'deepseek-chat', max_tokens: 4096, temperature: 0.3,
-        messages: [{ role: 'user', content: `你是一个专业翻译。将下面的英文文本批量翻译成中文。规则：
-1. 每个 [#N] 对应一条待翻译文本
-2. 保持原文格式，输出翻译即可，不要额外解释
-3. 输出格式：[#N] 然后是翻译后的中文
-
-待翻译文本：
-${texts}` }]
-      })
-    });
-    clearTimeout(timeout);
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const content = data.choices?.[0]?.message?.content || '';
-    const translations = {};
-    for (const line of content.split('\n')) {
-      const m = line.match(/^\[#(\d+)\]\s*(.+)/);
-      if (m) translations[parseInt(m[1])] = m[2].trim();
-    }
-    for (const t of needTranslation) {
-      const trans = translations[needTranslation.indexOf(t)];
-      if (trans && trans !== t.text) {
-        for (const item of items) {
-          if (item._id === t.id) {
-            if (t.field === 'title') item.title = trans;
-            if (t.field === 'snippet') item.snippet = trans;
-          }
-        }
-      }
-    }
-  } catch (e) { /* silent */ }
-}
-
 async function fetchNews() {
   if (fetchInProgress) return;
   fetchInProgress = true;
-  const parser = new RssParser({ timeout: 5000 });
+  const parser = new RssParser({ timeout: 3000 });
   const allItems = [];
+  // Fetch Weibo first (fastest), then RSS sources
   const results = await Promise.allSettled([
-    ...NEWS_SOURCES.map(s => fetchSingleSource(s, parser)),
-    fetchWeiboHotSearch()
+    fetchWeiboHotSearch(),
+    ...NEWS_SOURCES.map(s => fetchSingleSource(s, parser))
   ]);
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value.length) allItems.push(...r.value);
@@ -279,7 +184,6 @@ async function fetchNews() {
   const clustered = clusterAndScore(allItems);
   newsCache = clustered;
   newsLastFetch = Date.now();
-  translateBatch(clustered);
   fetchInProgress = false;
 }
 
@@ -288,7 +192,7 @@ app.get('/api/news', async (req, res) => {
   const { tag, sort, country, force } = req.query;
   if (!newsCache.length || (Date.now() - newsLastFetch > NEWS_TTL) || force === '1') {
     if (!newsCache.length) {
-      await Promise.race([fetchNews(), new Promise(r => setTimeout(r, 8000))]);
+      await Promise.race([fetchNews(), new Promise(r => setTimeout(r, 7000))]);
     } else {
       fetchNews();
     }
@@ -309,12 +213,7 @@ app.get('/api/news', async (req, res) => {
   });
 });
 
-// ==================== Start ====================
+// Warm cache on first import
 fetchNews();
-setInterval(fetchNews, NEWS_TTL);
-
-if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => console.log(`Dashboard running on port ${PORT}`));
-}
 
 module.exports = app;

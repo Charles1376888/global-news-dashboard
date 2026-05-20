@@ -8,4 +8,4 @@ services:
       - key: NODE_VERSION
         value: 18.x
       - key: DEEPSEEK_KEY
-        value: sk-aa98ab5a440f46c4b357ad7c72677af2
+        sync: false

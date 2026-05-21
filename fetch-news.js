@@ -73,7 +73,7 @@ function clusterAndScore(items) {
 async function fetchSource(source, parser) {
   try {
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 8000);
+    setTimeout(() => ctrl.abort(), 15000);
     const resp = await fetch(source.url, {
       signal: ctrl.signal,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36' }
@@ -104,7 +104,7 @@ async function fetchSource(source, parser) {
 async function fetchWeibo() {
   try {
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 8000);
+    setTimeout(() => ctrl.abort(), 15000);
     const resp = await fetch('https://weibo.com/ajax/side/hotSearch', {
       signal: ctrl.signal,
       headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) KHTML/537.36 Chrome/120.0.0.0 Mobile Safari/537.36', 'Referer': 'https://weibo.com/' }
@@ -132,7 +132,7 @@ async function fetchWeibo() {
 
 (async () => {
   console.log('Fetching news...');
-  const parser = new RssParser({ timeout: 8000 });
+  const parser = new RssParser({ timeout: 15000 });
   const allItems = [];
 
   // Fetch RSS + Weibo in parallel
